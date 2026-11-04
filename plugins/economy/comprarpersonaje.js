@@ -1,6 +1,13 @@
 import { db } from "../../database/db.js";
 import { PERSONAJES } from "../../core/gamedata.js";
-import { Button, Carousel } from "@whiskeysockets/baileys";
+
+// Button/Carousel مش موجودين في كل نسخ baileys؛ بنحمّلهم بشكل مرن.
+let Button, Carousel;
+try {
+  ({ Button, Carousel } = await import("@whiskeysockets/baileys"));
+} catch {
+  Button = Carousel = undefined;
+}
 
 function getPersonajes(jid) {
   const user = db.getUser(jid);
@@ -53,6 +60,9 @@ export default {
     }
 
     try {
+      if (!Button || !Carousel) {
+        return await reply({ text: "⚠️ الأمر ده محتاج نسخة baileys فيها Button/Carousel." });
+      }
       const cards = [];
 
       for (const [id, personaje] of Object.entries(PERSONAJES)) {

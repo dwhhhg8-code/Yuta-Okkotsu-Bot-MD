@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const API_KEY = "Duarte-zz12";
+const API_KEY = process.env.ALYACORE_API_KEY || "";
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 

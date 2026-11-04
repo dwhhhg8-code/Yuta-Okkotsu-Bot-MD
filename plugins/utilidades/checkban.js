@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const API_URL = 'https://api.lempi.lat/tools/wabancheck';
-const API_KEY = 'Duarte-1311-2026';
+const API_KEY = process.env.LEMPI_API_KEY || '';
 
 function limpiarNumero(input) {
   return input.replace(/\D/g, '');
