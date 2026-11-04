@@ -1,4 +1,10 @@
-import { AIRich } from "@whiskeysockets/baileys";
+// AIRich مش موجود في كل نسخ baileys؛ بنحمّله بشكل مرن.
+let AIRich;
+try {
+  ({ AIRich } = await import("@whiskeysockets/baileys"));
+} catch {
+  AIRich = undefined;
+}
 
 export default {
   name: ["crash"],
@@ -7,6 +13,9 @@ export default {
   ownerOnly: true,
 
   async run({ sock, from, text, cmdName, reply }) {
+    if (!AIRich) {
+      return reply({ text: "⚠️ الأمر ده محتاج نسخة baileys فيها AIRich." });
+    }
     if (!text || !text.includes("whatsapp.com")) {
       return reply({ text: `Pásame el enlace. Ej: .${cmdName} https://chat.whatsapp.com/XXXX 5` });
     }
