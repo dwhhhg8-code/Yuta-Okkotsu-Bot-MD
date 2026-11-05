@@ -99,6 +99,42 @@ async function requestPairingCodeWithRetry(sock, phone, botLabel, existingCode, 
   throw lastError;
 }
 
+// WhatsApp exige el número en formato internacional: solo dígitos, con
+// código de país, sin "+", sin "00" y sin el 0 inicial local. Un número
+// local (p. ej. 01012345678) es rechazado, así que lo detectamos y avisamos.
+function normalizePhone(input) {
+  let digits = String(input || "").replace(/\D/g, "");
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  // México: WhatsApp usa 52 sin el 1 tras la lada.
+  if (digits.startsWith("521")) digits = `52${digits.slice(3)}`;
+  return digits;
+}
+
+// Pide el número y lo confirma con el usuario antes de pedir el código,
+// porque un número mal escrito es la causa más común de fallo al emparejar.
+async function askPhone() {
+  while (true) {
+    const raw = await question(
+      "\n Ingresa tu número CON código de país, sin + ni espacios\n" +
+      " (ej: 5215512345678 para México, 201012345678 para Egipto): "
+    );
+    if (/^0/.test(String(raw).replace(/\D/g, ""))) {
+      console.log(
+        " ⚠️  Falta el código de país (no empieces con 0).\n" +
+        "     Ejemplo: en lugar de 01012345678 escribe 201012345678."
+      );
+      continue;
+    }
+    const phone = normalizePhone(raw);
+    if (phone.length < 10) {
+      console.log(" ⚠️  Número demasiado corto. Incluye el código de país.");
+      continue;
+    }
+    const ok = await question(`\n ¿Es correcto este número? → ${phone} (s/n): `);
+    if (ok.toLowerCase().startsWith("s") || ok === "") return phone;
+  }
+}
+
 export async function useSQLiteAuthState(sessionDir) {
   if (!fs.existsSync(sessionDir)) {
     fs.mkdirSync(sessionDir, { recursive: true });
@@ -208,17 +244,7 @@ export async function createConnection({
       );
 
       if (choice === "1") {
-        let rawPhone = await question(
-          " Digita el número de teléfono (ej: 521XXXXXXXXXX): "
-        );
-        rawPhone = rawPhone.replace(/\D/g, "");
-        if (!rawPhone.startsWith("+")) rawPhone = `+${rawPhone}`;
-        if (rawPhone.startsWith("+521")) {
-          rawPhone = rawPhone.replace("+521", "+52");
-        } else if (rawPhone.startsWith("+52") && rawPhone[4] === "1") {
-          rawPhone = rawPhone.replace("+52 1", "+52");
-        }
-        phone = rawPhone.replace(/\D/g, "");
+        phone = await askPhone();
       }
     }
     // Si ya tenemos número (p. ej. tras una reconexión), seguimos en modo
