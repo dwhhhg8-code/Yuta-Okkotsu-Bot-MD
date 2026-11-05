@@ -70,6 +70,10 @@ const activePairingCodes = new Map();
 // reintentar el request producía un bucle infinito de códigos).
 const pairingRequested = new Map();
 
+// Sesiones que ya avisaron que esperan el código, para no repetir el
+// mensaje en cada reconexión mientras el usuario lo escribe.
+const pairingWaitingNotified = new Set();
+
 function isValidPairingCode(code) {
   return typeof code === "string" && code.length === 8 && [...code].every((c) => CROCKFORD.includes(c));
 }
@@ -235,13 +239,14 @@ export async function createConnection({
 
   if (!isSubbot && !state.creds.registered) {
     if (!phone && _attempt === 0) {
-      const choice = await question(
-        "\n ╔══════════════════════════════════╗\n" +
-        " ║ [1] Código de emparejamiento ║\n" +
-        " ║ [2] Código QR ║\n" +
-        " ╚══════════════════════════════════╝\n" +
-        " Elige (1 o 2): "
-      );
+      const opciones = ["[1] Código de emparejamiento", "[2] Código QR"];
+      const anchoMenu = Math.max(...opciones.map((o) => o.length));
+      const menu = [
+        `╔${"═".repeat(anchoMenu + 2)}╗`,
+        ...opciones.map((o) => `║ ${o.padEnd(anchoMenu)} ║`),
+        `╚${"═".repeat(anchoMenu + 2)}╝`,
+      ].join("\n ");
+      const choice = await question(`\n ${menu}\n Elige (1 o 2): `);
 
       if (choice === "1") {
         phone = await askPhone();
@@ -326,13 +331,17 @@ export async function createConnection({
       pairingRequested.set(sessionDir, true);
       activePairingCodes.set(sessionDir, code);
       const formatted = code?.match(/.{1,4}/g)?.join("-") || code;
-      console.log(
-        `\n ┌───────────────────────────────────┐\n` +
-        ` │ 🔑 Tu código: ${String(formatted).padEnd(18)}│\n` +
-        ` └───────────────────────────────────┘\n` +
-        `\n Abre WhatsApp → Dispositivos vinculados →\n` +
-        ` Vincular con número de teléfono e ingrésalo.\n`
-      );
+        // El emoji 🔑 ocupa 2 columnas pero 2 unidades UTF-16, así que
+        // etiqueta.length coincide con el ancho visible y la caja queda alineada.
+        const etiqueta = ` 🔑 Tu código: ${formatted}`;
+        const anchoCodigo = etiqueta.length + 1;
+        console.log(
+          `\n ┌${"─".repeat(anchoCodigo)}┐\n` +
+          ` │${etiqueta.padEnd(anchoCodigo)}│\n` +
+          ` └${"─".repeat(anchoCodigo)}┘\n` +
+          `\n Abre WhatsApp → Dispositivos vinculados →\n` +
+          ` Vincular con número de teléfono e ingrésalo.\n`
+        );
     } catch (e) {
       log.error(`[${botLabel}] Error al pedir código: ${e.message}`);
       log.warn(`[${botLabel}] Reintentando con QR. Reinicia el bot y elige la opción 2.`);
@@ -367,6 +376,7 @@ export async function createConnection({
       connected = true;
       activePairingCodes.delete(sessionDir);
       pairingRequested.delete(sessionDir);
+      pairingWaitingNotified.delete(sessionDir);
       log.ok(`[${botLabel}] ✅ Conectado → ${sock.user?.id}`);
       await flushPending();
     }
@@ -377,7 +387,22 @@ export async function createConnection({
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const errorMsg = lastDisconnect?.error?.message || "Desconocido";
 
-      log.warn(`[${botLabel}] ❌ Conexión cerrada → código: ${statusCode} | ${errorMsg}`);
+      // Tras emitir el código WhatsApp cierra el socket con 428 de forma
+      // esperada. No es un error: avisamos que esperamos el código y
+      // reconectamos sin tocar el contador de intentos.
+      const esperandoCodigo = pairingMode && statusCode === DisconnectReason.connectionClosed;
+      if (esperandoCodigo) {
+        if (!pairingWaitingNotified.has(sessionDir)) {
+          pairingWaitingNotified.add(sessionDir);
+          log.info(`[${botLabel}] Esperando a que ingreses el código en el teléfono...`);
+        }
+        setTimeout(() => {
+          createConnection({ sessionDir, botLabel, isSubbot, phoneNumber: phone, _attempt });
+        }, 5000);
+        return;
+      }
+
+      log.warn(`[${botLabel}] Conexión cerrada → código: ${statusCode} | ${errorMsg}`);
 
       if (statusCode === DisconnectReason.loggedOut) {
         log.error(`[${botLabel}] Sesión cerrada (loggedOut). Elimina el archivo "auth.db" dentro de la carpeta "${path.basename(sessionDir)}" y reinicia.`);
@@ -392,18 +417,6 @@ export async function createConnection({
       if (statusCode === DisconnectReason.badSession) {
         log.error(`[${botLabel}] Sesión corrupta. Limpiando y reconectando...`);
         await clearSocketFiles(sessionDir);
-      }
-
-      // Tras emitir el código de emparejamiento WhatsApp cierra el socket
-      // con 428 de forma esperada: hay que esperar a que el usuario lo
-      // ingrese. Reconectamos sin reiniciar el contador de intentos para
-      // no agotar maxReconnectAttempts durante la espera.
-      if (pairingMode && statusCode === DisconnectReason.connectionClosed) {
-        log.info(`[${botLabel}] Esperando a que ingreses el código en el teléfono...`);
-        setTimeout(() => {
-          createConnection({ sessionDir, botLabel, isSubbot, phoneNumber: phone, _attempt });
-        }, 5000);
-        return;
       }
 
       if (_attempt < config.maxReconnectAttempts) {
