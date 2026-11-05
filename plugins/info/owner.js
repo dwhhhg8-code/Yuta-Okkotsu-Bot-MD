@@ -1,7 +1,7 @@
 import config from '../../config.js'
 
 export default {
-  name: ['owner', 'dueño'],
+  name: ['owner', 'dueño', 'المالك'],
   description: 'Muestra la información del dueño del bot',
   category: 'info',
   ownerOnly: false,

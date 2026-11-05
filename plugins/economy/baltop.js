@@ -5,7 +5,7 @@ const POR_PAGINA = 10
 const numOf = (jid = '') => String(jid).split('@')[0].split(':')[0]
 
 export default {
-  name: ['baltop', 'ricos'],
+  name: ['baltop', 'ricos', 'الأغنياء', 'اغنياء'],
   description: 'Top de usuarios con más Fragmentos en el grupo',
   category: 'economy',
   ownerOnly: false,

@@ -1,7 +1,7 @@
 import { db } from '../../database/db.js'
 
 export default {
-  name: ['saldo', 'balance', 'bal'],
+  name: ['saldo', 'balance', 'bal', 'رصيد', 'فلوسي'],
   description: 'Muestra tu balance de Fragmentos',
   category: 'economy',
   ownerOnly: false,

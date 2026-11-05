@@ -1,7 +1,7 @@
 import { ITEMS } from '../../core/gamedata.js'
 
 export default {
-  name: ['tienda', 'shop'],
+  name: ['tienda', 'shop', 'المتجر', 'دكان'],
   description: 'Muestra los items disponibles para comprar',
   category: 'economy',
   ownerOnly: false,

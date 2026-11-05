@@ -21,7 +21,7 @@ const BONUS_ITEMS = {
 }
 
 export default {
-  name: ['work', 'trabajar'],
+  name: ['work', 'trabajar', 'اشتغل', 'شغل'],
   description: 'Trabaja para ganar Fragmentos',
   category: 'economy',
   ownerOnly: false,

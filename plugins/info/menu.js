@@ -53,7 +53,7 @@ const catDescripciones = {
 }
 
 export default {
-  name: ["menu", "help", "ayuda"],
+  name: ["menu", "help", "ayuda", "القائمة", "مساعدة"],
   description: "Muestra el menú del sistema.",
   category: "info",
   ownerOnly: false,

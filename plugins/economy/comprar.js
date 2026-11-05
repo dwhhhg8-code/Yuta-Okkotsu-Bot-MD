@@ -2,7 +2,7 @@ import { db } from '../../database/db.js'
 import { ITEMS } from '../../core/gamedata.js'
 
 export default {
-  name: ['comprar', 'buy'],
+  name: ['comprar', 'buy', 'اشتري', 'شراء'],
   description: 'Compra un item de la tienda',
   category: 'economy',
   ownerOnly: false,

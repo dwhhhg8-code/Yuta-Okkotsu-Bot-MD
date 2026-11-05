@@ -8,7 +8,7 @@ function cleanJid(jid = "") {
 }
 
 export default {
-  name: ['demote', 'quitaradmin'],
+  name: ['demote', 'quitaradmin', 'نزّل', 'تخفيض'],
   description: 'Quita el administrador a un miembro del grupo',
   category: 'grupos',
   groupOnly: true,

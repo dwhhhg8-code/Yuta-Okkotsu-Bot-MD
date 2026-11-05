@@ -8,7 +8,7 @@ const ITEMS_INFO = {
 }
 
 export default {
-  name: ['inventario', 'inv'],
+  name: ['inventario', 'inv', 'حقيبتي', 'شنطتي'],
   description: 'Muestra tu inventario de items',
   category: 'economy',
   ownerOnly: false,
