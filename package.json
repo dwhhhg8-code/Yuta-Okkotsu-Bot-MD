@@ -21,7 +21,6 @@
     "jimp": "*",
     "node-webpmux": "^3.1.7",
     "pino": "^8.19.0",
-    "qrcode-terminal": "^0.12.0",
     "sharp": "^0.33.5",
     "tough-cookie": "^5.1.2",
     "yt-search": "^2.13.1"

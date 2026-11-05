@@ -12,7 +12,6 @@ import path from "path";
 import readline from "readline";
 import Database from "better-sqlite3";
 import fs from "fs";
-import qrcode from "qrcode-terminal";
 import { log } from "./logger.js";
 import config from "../config.js";
 import { handleMessage, registerGroupCacheEvents } from "./messageHandler.js";
@@ -28,6 +27,75 @@ function question(prompt) {
       resolve(ans.trim());
     });
   });
+}
+
+// Espera a que el socket esté listo para enviar el iq de emparejamiento.
+// Sin esto, requestPairingCode se cuelga hasta defaultQueryTimeoutMs (60s).
+function waitForSocketReady(sock, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    if (sock.ws?.readyState === 1) return resolve();
+
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("El socket no estuvo listo a tiempo"));
+    }, timeoutMs);
+
+    const onOpen = () => { cleanup(); resolve(); };
+    const onClose = () => { cleanup(); reject(new Error("El socket se cerró antes de emparejar")); };
+
+    function cleanup() {
+      clearTimeout(timer);
+      sock.ws?.off?.("open", onOpen);
+      sock.ws?.off?.("close", onClose);
+    }
+
+    sock.ws?.once?.("open", onOpen);
+    sock.ws?.once?.("close", onClose);
+  });
+}
+
+// El código de emparejamiento de WhatsApp usa Crockford base32
+// (123456789ABCDEFGHJKLMNPQRSTVWXYZ): no admite I, L, O ni U.
+// Un código fijo como "GITHUBUG" es inválido y WhatsApp rechaza el vínculo,
+// dejando el await de requestPairingCode colgado.
+const CROCKFORD = "123456789ABCDEFGHJKLMNPQRSTVWXYZ";
+
+// Código de emparejamiento vigente por sesión, para que una reconexión
+// no emita uno nuevo mientras el usuario lo escribe.
+const activePairingCodes = new Map();
+
+// Sesiones que ya pidieron su código: evita volver a pedirlo en cada
+// reconexión (WhatsApp cierra el socket con 428 tras emitirlo, así que
+// reintentar el request producía un bucle infinito de códigos).
+const pairingRequested = new Map();
+
+function isValidPairingCode(code) {
+  return typeof code === "string" && code.length === 8 && [...code].every((c) => CROCKFORD.includes(c));
+}
+
+async function requestPairingCodeWithRetry(sock, phone, botLabel, existingCode, attempts = 3) {
+  let lastError;
+  // Reutilizamos el código ya emitido para que una reconexión no muestre
+  // un código distinto mientras el usuario lo escribe en el teléfono.
+  const reuse = isValidPairingCode(existingCode) ? existingCode : undefined;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      await waitForSocketReady(sock);
+      const code = await Promise.race([
+        sock.requestPairingCode(phone, reuse),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("timeout al pedir el código")), 30000)
+        ),
+      ]);
+      if (!code) throw new Error("código vacío");
+      return code;
+    } catch (e) {
+      lastError = e;
+      log.warn(`[${botLabel}] Intento ${i}/${attempts} de emparejar falló: ${e.message}`);
+      if (i < attempts) await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+  throw lastError;
 }
 
 export async function useSQLiteAuthState(sessionDir) {
@@ -112,9 +180,11 @@ export async function createConnection({
 } = {}) {
   await mkdir(sessionDir, { recursive: true });
 
+  // No borrar las claves de sesión al reconectar: clearSocketFiles elimina
+  // todas las entradas menos "creds", lo que rompe el vínculo cuando el
+  // usuario todavía está escribiendo el código en el teléfono. Solo se
+  // limpia ante una sesión corrupta (badSession), más abajo.
   if (_attempt > 0) {
-    log.warn(`[${botLabel}] Limpiando base de datos de sockets antes de reconectar...`);
-    await clearSocketFiles(sessionDir);
     const delay = Math.min(config.reconnectDelay * _attempt, 30000);
     log.info(`[${botLabel}] Esperando ${delay / 1000}s para reconectar...`);
     await new Promise((r) => setTimeout(r, delay));
@@ -126,29 +196,18 @@ export async function createConnection({
   let useCode = false;
   let phone = phoneNumber;
 
-  if (!isSubbot && !state.creds.registered && _attempt === 0) {
-    const choice = await question(
-      "\n ╔══════════════════════════════════╗\n" +
-      " ║ [1] Código de emparejamiento ║\n" +
-      " ║ [2] Código QR ║\n" +
-      " ╚══════════════════════════════════╝\n" +
-      " Elige (1 o 2): "
-    );
-
-    if (choice === "1") {
-      useCode = true;
+  if (!isSubbot && !state.creds.registered) {
+    if (!phone) {
       let rawPhone = await question(
-        " Digita el número de teléfono (ej: 521XXXXXXXXXX): "
+        "\n Ingresa tu número de teléfono (ej: 521XXXXXXXXXX): "
       );
       rawPhone = rawPhone.replace(/\D/g, "");
-      if (!rawPhone.startsWith("+")) rawPhone = `+${rawPhone}`;
-      if (rawPhone.startsWith("+521")) {
-        rawPhone = rawPhone.replace("+521", "+52");
-      } else if (rawPhone.startsWith("+52") && rawPhone[4] === "1") {
-        rawPhone = rawPhone.replace("+52 1", "+52");
-      }
-      phone = rawPhone.replace(/\D/g, "");
+      // México: WhatsApp usa 52 sin el 1 tras la lada.
+      if (rawPhone.startsWith("521")) rawPhone = `52${rawPhone.slice(3)}`;
+      else if (rawPhone.startsWith("52") && rawPhone[2] === "1") rawPhone = `52${rawPhone.slice(3)}`;
+      phone = rawPhone;
     }
+    useCode = true;
   }
 
   let sock;
@@ -192,7 +251,7 @@ export async function createConnection({
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
       },
-      printQRInTerminal: !useCode,
+      printQRInTerminal: false,
       logger: pino({ level: "silent" }),
       browser: useCode ? ["Ubuntu", "Chrome", "20.0.04"] : ["YutaBot", "Chrome", "1.0.0"],
       syncFullHistory: false,
@@ -211,39 +270,50 @@ export async function createConnection({
   } catch (e) {
     log.error(`[${botLabel}] Error al crear socket: ${e.message}`);
     if (_attempt < config.maxReconnectAttempts) {
-      return createConnection({ sessionDir, botLabel, isSubbot, phoneNumber, _attempt: _attempt + 1 });
+      return createConnection({ sessionDir, botLabel, isSubbot, phoneNumber: phone, _attempt: _attempt + 1 });
     }
     return;
   }
 
   sock.sessionDir = sessionDir;
 
-  if (useCode && !state.creds.registered) {
-    await new Promise((r) => setTimeout(r, 3000));
+  if (useCode && !state.creds.registered && !pairingRequested.has(sessionDir)) {
     try {
-      let code = await sock.requestPairingCode(phone, "GITHUBUG");
-      code = code?.match(/.{1,4}/g)?.join("-") || code;
+      const prevCode = activePairingCodes.get(sessionDir);
+      const code = await requestPairingCodeWithRetry(sock, phone, botLabel, prevCode);
+      pairingRequested.set(sessionDir, true);
+      activePairingCodes.set(sessionDir, code);
+      const formatted = code?.match(/.{1,4}/g)?.join("-") || code;
       console.log(
-        `\n ┌─────────────────────────────┐\n` +
-        ` │ 🔑 Tu código: ${String(code).padEnd(14)}│\n` +
-        ` └─────────────────────────────┘\n`
+        `\n ┌───────────────────────────────────┐\n` +
+        ` │ 🔑 Tu código: ${String(formatted).padEnd(18)}│\n` +
+        ` └───────────────────────────────────┘\n` +
+        `\n Abre WhatsApp → Dispositivos vinculados →\n` +
+        ` Vincular con número de teléfono e ingrésalo.\n`
       );
     } catch (e) {
       log.error(`[${botLabel}] Error al pedir código: ${e.message}`);
+      log.warn(`[${botLabel}] No se pudo generar el código. Reinicia el bot e inténtalo de nuevo.`);
+      try { sock.end(new Error("pairing-code-failed")); } catch {}
     }
   }
 
+  const pairingMode = useCode && !state.creds.registered;
+
+  // En modo emparejamiento el socket permanece cerrado hasta que el usuario
+  // ingrese el código, así que el timeout corto lo mataría. Le damos margen.
+  const timeoutMs = pairingMode ? 300000 : 75000;
   connectionTimeout = setTimeout(() => {
     if (!connected) {
       log.warn(`[${botLabel}] Timeout de conexión alcanzado, reconectando...`);
       try { sock.end(new Error("timeout")); } catch {}
     }
-  }, 75000);
+  }, timeoutMs);
 
   sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
     if (qr) {
-      log.info(`[${botLabel}] QR listo para escanear`);
-      qrcode.generate(qr, { small: true });
+      // Emparejamiento solo por código: ignoramos los QR de baileys.
+      log.info(`[${botLabel}] Esperando código de emparejamiento...`);
     }
 
     if (connection === "connecting") {
@@ -253,6 +323,8 @@ export async function createConnection({
     if (connection === "open") {
       clearConnTimeout();
       connected = true;
+      activePairingCodes.delete(sessionDir);
+      pairingRequested.delete(sessionDir);
       log.ok(`[${botLabel}] ✅ Conectado → ${sock.user?.id}`);
       await flushPending();
     }
@@ -280,9 +352,21 @@ export async function createConnection({
         await clearSocketFiles(sessionDir);
       }
 
+      // Tras emitir el código de emparejamiento WhatsApp cierra el socket
+      // con 428 de forma esperada: hay que esperar a que el usuario lo
+      // ingrese. Reconectamos sin reiniciar el contador de intentos para
+      // no agotar maxReconnectAttempts durante la espera.
+      if (pairingMode && statusCode === DisconnectReason.connectionClosed) {
+        log.info(`[${botLabel}] Esperando a que ingreses el código en el teléfono...`);
+        setTimeout(() => {
+          createConnection({ sessionDir, botLabel, isSubbot, phoneNumber: phone, _attempt });
+        }, 5000);
+        return;
+      }
+
       if (_attempt < config.maxReconnectAttempts) {
         log.info(`[${botLabel}] Reconectando (intento ${_attempt + 1}/${config.maxReconnectAttempts})...`);
-        createConnection({ sessionDir, botLabel, isSubbot, phoneNumber, _attempt: _attempt + 1 });
+        createConnection({ sessionDir, botLabel, isSubbot, phoneNumber: phone, _attempt: _attempt + 1 });
       } else {
         log.error(`[${botLabel}] Se agotaron los intentos de reconexión.`);
       }
