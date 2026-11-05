@@ -5,7 +5,8 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "setup": "node scripts/ensure-deps.js"
   },
   "dependencies": {
     "@napi-rs/canvas": "^0.1.53",
