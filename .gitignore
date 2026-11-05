@@ -7,3 +7,4 @@ database/*.sqlite-wal
 .env
 *.log
 .DS_Store
+package-lock.json

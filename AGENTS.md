@@ -19,9 +19,8 @@ Notas para agentes que trabajen en este repositorio.
   `prepare` para que no recompile al instalar.
 - El nombre del paquete dentro del fork es `yuta-baileys`. `ensure-deps.js` usa
   ese nombre para detectar si se instaló la librería equivocada.
-- Si se cambia la dependencia en `package.json`, hay que regenerar
-  `package-lock.json` (`npm install --package-lock-only`) y mantener `resolved`
-  en `git+https` (nunca `git+ssh`).
+- Este repositorio **no** versiona `package-lock.json` (está en `.gitignore`).
+  `ensure-deps.js` usa `npm install` cuando no hay lockfile.
 
 ## Comandos
 
