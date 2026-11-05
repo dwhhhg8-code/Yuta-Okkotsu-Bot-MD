@@ -12,6 +12,7 @@ import path from "path";
 import readline from "readline";
 import Database from "better-sqlite3";
 import fs from "fs";
+import qrcode from "qrcode-terminal";
 import { log } from "./logger.js";
 import config from "../config.js";
 import { handleMessage, registerGroupCacheEvents } from "./messageHandler.js";
@@ -197,17 +198,32 @@ export async function createConnection({
   let phone = phoneNumber;
 
   if (!isSubbot && !state.creds.registered) {
-    if (!phone) {
-      let rawPhone = await question(
-        "\n Ingresa tu número de teléfono (ej: 521XXXXXXXXXX): "
+    if (!phone && _attempt === 0) {
+      const choice = await question(
+        "\n ╔══════════════════════════════════╗\n" +
+        " ║ [1] Código de emparejamiento ║\n" +
+        " ║ [2] Código QR ║\n" +
+        " ╚══════════════════════════════════╝\n" +
+        " Elige (1 o 2): "
       );
-      rawPhone = rawPhone.replace(/\D/g, "");
-      // México: WhatsApp usa 52 sin el 1 tras la lada.
-      if (rawPhone.startsWith("521")) rawPhone = `52${rawPhone.slice(3)}`;
-      else if (rawPhone.startsWith("52") && rawPhone[2] === "1") rawPhone = `52${rawPhone.slice(3)}`;
-      phone = rawPhone;
+
+      if (choice === "1") {
+        let rawPhone = await question(
+          " Digita el número de teléfono (ej: 521XXXXXXXXXX): "
+        );
+        rawPhone = rawPhone.replace(/\D/g, "");
+        if (!rawPhone.startsWith("+")) rawPhone = `+${rawPhone}`;
+        if (rawPhone.startsWith("+521")) {
+          rawPhone = rawPhone.replace("+521", "+52");
+        } else if (rawPhone.startsWith("+52") && rawPhone[4] === "1") {
+          rawPhone = rawPhone.replace("+52 1", "+52");
+        }
+        phone = rawPhone.replace(/\D/g, "");
+      }
     }
-    useCode = true;
+    // Si ya tenemos número (p. ej. tras una reconexión), seguimos en modo
+    // código sin volver a preguntar.
+    useCode = !!phone;
   }
 
   let sock;
@@ -251,7 +267,7 @@ export async function createConnection({
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
       },
-      printQRInTerminal: false,
+      printQRInTerminal: !useCode,
       logger: pino({ level: "silent" }),
       browser: useCode ? ["Ubuntu", "Chrome", "20.0.04"] : ["YutaBot", "Chrome", "1.0.0"],
       syncFullHistory: false,
@@ -293,7 +309,7 @@ export async function createConnection({
       );
     } catch (e) {
       log.error(`[${botLabel}] Error al pedir código: ${e.message}`);
-      log.warn(`[${botLabel}] No se pudo generar el código. Reinicia el bot e inténtalo de nuevo.`);
+      log.warn(`[${botLabel}] Reintentando con QR. Reinicia el bot y elige la opción 2.`);
       try { sock.end(new Error("pairing-code-failed")); } catch {}
     }
   }
@@ -311,9 +327,9 @@ export async function createConnection({
   }, timeoutMs);
 
   sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
-    if (qr) {
-      // Emparejamiento solo por código: ignoramos los QR de baileys.
-      log.info(`[${botLabel}] Esperando código de emparejamiento...`);
+    if (qr && !useCode) {
+      log.info(`[${botLabel}] QR listo para escanear`);
+      qrcode.generate(qr, { small: true });
     }
 
     if (connection === "connecting") {
